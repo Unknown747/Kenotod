@@ -51,8 +51,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
 }
 
-# Currency on Stake for real-money play (lowercase enum value)
-CURRENCY = "usd"
+# Currency on Stake — harus huruf kecil sesuai CurrencyEnum API
+# Sesuaikan dengan currency akun kamu (lihat saldo di Stake)
+# Contoh: "trx", "eth", "btc", "usdt", "ltc", "doge", "xrp", "bnb"
+CURRENCY = "trx"
 
 # IDR → USD conversion
 IDR_PER_USD = 16_000
