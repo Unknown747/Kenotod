@@ -166,7 +166,16 @@ def run_test():
             log.info("↩  Reset bet ke Rp%.0f (threshold terlampaui)", STARTING_BET * IDR_PER_USD)
             current_bet = STARTING_BET
 
-        bet_amount = max(round(current_bet, 8), MIN_BET)
+        # ── Proactive: bet terlalu kecil → reset ke base ─────────────────
+        if current_bet < MIN_BET - 1e-10:
+            log.warning(
+                "⚠️  Bet Rp%.4f di bawah minimum — reset ke base Rp%.0f",
+                current_bet * IDR_PER_USD,
+                STARTING_BET * IDR_PER_USD,
+            )
+            current_bet = STARTING_BET
+
+        bet_amount = round(current_bet, 8)
 
         # ── Simulasi bet ─────────────────────────────────────────────────
         if balance_usd < bet_amount:

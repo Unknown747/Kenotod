@@ -89,6 +89,14 @@ BET_DELAY = 1.0
 
 # ─── GraphQL helpers ────────────────────────────────────────────────────────
 
+class BetTooSmallError(Exception):
+    """Stake menolak bet karena jumlahnya di bawah minimum."""
+
+
+# Kata kunci error "amount too small" dari Stake API
+_TOO_SMALL_KEYWORDS = ("too small", "minimum", "minim", "terlalu kecil", "below")
+
+
 def _gql(query: str, variables: dict) -> dict:
     """Execute a GraphQL request and return the 'data' portion."""
     payload = {"query": query, "variables": variables}
@@ -103,6 +111,9 @@ def _gql(query: str, variables: dict) -> dict:
 
     result = response.json()
     if "errors" in result:
+        msgs = " ".join(e.get("message", "").lower() for e in result["errors"])
+        if any(k in msgs for k in _TOO_SMALL_KEYWORDS):
+            raise BetTooSmallError(msgs)
         log.error("GraphQL errors: %s", result["errors"])
         raise RuntimeError(f"GraphQL error: {result['errors']}")
     return result.get("data", {})
@@ -276,13 +287,30 @@ def run_bot():
             current_bet = STARTING_BET
             reset_seed()
 
-        bet_amount = max(round(current_bet, 8), MIN_BET)
+        # ── Proactive: bet terlalu kecil → reset ke base ─────────────────
+        if current_bet < MIN_BET - 1e-10:
+            log.warning(
+                "⚠️  Bet Rp%.4f di bawah minimum — reset ke base Rp%.0f",
+                current_bet * IDR_PER_USD,
+                STARTING_BET * IDR_PER_USD,
+            )
+            current_bet = STARTING_BET
+
+        bet_amount = round(current_bet, 8)
 
         # ── Place bet ────────────────────────────────────────────────────
         log.info("Spin #%d | Bet: Rp%.0f", total_rounds, bet_amount * IDR_PER_USD)
 
         try:
             result = place_bet(bet_amount)
+        except BetTooSmallError:
+            log.warning(
+                "⚠️  Amount too small (Rp%.4f) — reset ke base Rp%.0f & lanjut",
+                bet_amount * IDR_PER_USD,
+                STARTING_BET * IDR_PER_USD,
+            )
+            current_bet = STARTING_BET
+            continue
         except Exception as exc:
             log.error("Bet gagal: %s — retry 5 detik…", exc)
             time.sleep(5)
