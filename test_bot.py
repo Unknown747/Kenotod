@@ -30,7 +30,7 @@ CURRENCY        = "idr"
 KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]   # 10 spot
 
 STARTING_BET    = 160
-RESET_THRESHOLD = 160
+RESET_THRESHOLD = 500
 MIN_BET         = 100
 WIN_MULTIPLIER  = 0.78
 LOSE_MULTIPLIER = 1.25
@@ -155,14 +155,15 @@ def run_test():
         total_wager  += result["amount"]
         won           = result["profit"] > 0
 
+        # Sync fix: kalikan multiplier ke bet_amount (int aktual), bukan current_bet (float)
         if won:
             ses_wins    += 1
             total_wins  += 1
-            current_bet  = current_bet * WIN_MULTIPLIER
+            current_bet  = bet_amount * WIN_MULTIPLIER
         else:
             ses_losses  += 1
             total_losses += 1
-            current_bet  = current_bet * LOSE_MULTIPLIER
+            current_bet  = bet_amount * LOSE_MULTIPLIER
 
         outcome = "WIN 🟢" if won else "LOSE 🔴"
         log.info(

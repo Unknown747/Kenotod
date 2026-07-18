@@ -59,7 +59,7 @@ KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]
 
 # Bet (IDR) — selalu integer bulat karena IDR tidak pakai desimal
 STARTING_BET    = 160      # Rp160
-RESET_THRESHOLD = 160      # Rp160
+RESET_THRESHOLD = 500      # Rp500
 MIN_BET         = 100      # Batas minimum — jika di bawah ini, reset ke STARTING_BET
 
 WIN_MULTIPLIER  = 0.78
@@ -313,16 +313,22 @@ def run_bot():
         total_wager  += result["amount"]
         won           = profit_ronde > 0
 
+        # Kalikan multiplier ke bet_amount (integer aktual yang dikirim ke Stake),
+        # bukan ke current_bet (float) — mencegah float drift dari mempengaruhi
+        # progressi bet yang tidak sesuai dengan nilai yang benar-benar dibet.
         if won:
             ses_wins    += 1
             total_wins  += 1
-            current_bet  = current_bet * WIN_MULTIPLIER
+            current_bet  = bet_amount * WIN_MULTIPLIER
         else:
             ses_losses  += 1
             total_losses += 1
-            current_bet  = current_bet * LOSE_MULTIPLIER
+            current_bet  = bet_amount * LOSE_MULTIPLIER
 
-        log.info("       → %s | %s", "WIN 🟢" if won else "LOSE 🔴", stats_line())
+        log.info("       → %s | Saldo: Rp%s | %s",
+                 "WIN 🟢" if won else "LOSE 🔴",
+                 f"{result['balance']:,.0f}",
+                 stats_line())
 
         # FIX #5: Cek reset threshold SETELAH bet ditempatkan
         # → ronde berikutnya langsung dimulai dari STARTING_BET jika terlewati
