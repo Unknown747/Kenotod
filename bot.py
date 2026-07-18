@@ -7,8 +7,9 @@ Strategi:
   - WIN  → bet berikutnya × 0.78  (turun 22%)
   - LOSE → bet berikutnya × 1.25  (naik 25%)
 
-Reset rule (dicek SEBELUM perubahan ×):
-  Jika bet > reset_threshold → reset ke starting_bet, rotasi seed
+Reset rule (dicek SETELAH bet ditempatkan):
+  Jika bet_amount yang baru saja dipakai > reset_threshold
+  → ronde berikutnya dimulai dari starting_bet & rotasi seed
 
 Jeda otomatis (pause lalu lanjut):
   profit sesi ≥ Rp5.000  → jeda 1 menit, reset sesi
@@ -56,7 +57,7 @@ CURRENCY = "idr"
 # Angka keno yang dipilih (10 spot, 1–40)
 KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]
 
-# Bet (IDR)
+# Bet (IDR) — selalu integer bulat karena IDR tidak pakai desimal
 STARTING_BET    = 160      # Rp160
 RESET_THRESHOLD = 160      # Rp160
 MIN_BET         = 100      # Batas minimum — jika di bawah ini, reset ke STARTING_BET
@@ -162,10 +163,11 @@ mutation KenoBet(
 
 def place_bet(amount_idr: float) -> dict:
     """
-    Pasang satu bet Keno. Amount dalam IDR.
+    Pasang satu bet Keno. Amount dalam IDR (dibulatkan ke integer bulat).
     Return: { id, amount, payout, profit, balance }  ← semua dalam IDR
     """
-    amount_idr = max(round(amount_idr, 2), MIN_BET)
+    # FIX #1: IDR tidak pakai desimal — kirim sebagai integer bulat
+    amount_idr = max(int(round(amount_idr)), MIN_BET)
     identifier = _random_seed(16)
 
     data = _gql(KENO_BET_MUTATION, {
@@ -181,8 +183,13 @@ def place_bet(amount_idr: float) -> dict:
     amount = float(bet.get("amount", amount_idr))
     profit = payout - amount
 
-    balances = bet.get("user", {}).get("balances", [{}])
-    balance  = float(balances[0].get("available", {}).get("amount", 0)) if balances else 0
+    # FIX #3: Cari saldo sesuai currency yang dikonfigurasi, bukan langsung [0]
+    balance = 0.0
+    for bal in bet.get("user", {}).get("balances", []):
+        avail = bal.get("available", {})
+        if avail.get("currency", "").lower() == CURRENCY.lower():
+            balance = float(avail.get("amount", 0))
+            break
 
     return {
         "id":      bet["id"],
@@ -234,43 +241,65 @@ def run_bot():
     total_losses = 0
     total_rounds = 0
 
+    # FIX #4: Tampilkan ses_wins & ses_losses sesi, bukan hanya total global
     def stats_line() -> str:
         p = ses_profit
         profit_str = f"+Rp{p:,.0f}" if p >= 0 else f"-Rp{abs(p):,.0f}"
         return (
             f"Wager : Rp{total_wager:,.0f}  |  "
             f"Profit : {profit_str}  |  "
-            f"W/L : {total_wins}/{total_losses}"
+            f"Sesi W/L : {ses_wins}/{ses_losses}  |  "
+            f"Total W/L : {total_wins}/{total_losses}"
         )
+
+    # FIX #2: Lacak apakah STARTING_BET sudah pernah gagal agar tidak infinite loop
+    _too_small_fallback_used = False
 
     while True:
         total_rounds += 1
 
-        # ── Reset jika bet melebihi threshold (akibat loss streak) ───────
-        if current_bet > RESET_THRESHOLD + 1e-6:
-            log.info("↩  Bet Rp%.0f > threshold — reset ke Rp%d & rotasi seed",
-                     current_bet, STARTING_BET)
-            current_bet = STARTING_BET
-            reset_seed()
-
-        # ── Proactive: bet terlalu kecil (akibat win streak) ─────────────
+        # ── Guard: bet terlalu kecil akibat win streak ────────────────────
         if current_bet < MIN_BET - 1e-6:
             log.warning("⚠️  Bet Rp%.2f di bawah minimum — reset ke Rp%d",
                         current_bet, STARTING_BET)
             current_bet = STARTING_BET
+            _too_small_fallback_used = False
 
-        bet_amount = round(current_bet, 2)
+        bet_amount = int(round(current_bet))
 
         log.info("Spin #%d | Bet: Rp%d", total_rounds, bet_amount)
 
         # ── Pasang bet ────────────────────────────────────────────────────
         try:
             result = place_bet(bet_amount)
+            # Reset flag fallback setelah bet berhasil
+            _too_small_fallback_used = False
         except BetTooSmallError:
-            log.warning("⚠️  Amount too small (Rp%.2f) — reset ke Rp%d",
-                        bet_amount, STARTING_BET)
-            current_bet = STARTING_BET
-            continue
+            # FIX #2: Proteksi infinite loop BetTooSmallError
+            if not _too_small_fallback_used:
+                log.warning(
+                    "⚠️  Amount too small (Rp%d) — reset ke STARTING_BET Rp%d",
+                    bet_amount, STARTING_BET,
+                )
+                current_bet = STARTING_BET
+                _too_small_fallback_used = True
+                continue
+            else:
+                # STARTING_BET pun ditolak — coba MIN_BET sebagai last resort
+                if bet_amount != MIN_BET:
+                    log.warning(
+                        "⚠️  STARTING_BET Rp%d masih ditolak — coba MIN_BET Rp%d",
+                        STARTING_BET, MIN_BET,
+                    )
+                    current_bet = MIN_BET
+                    continue
+                else:
+                    log.error(
+                        "❌ MIN_BET Rp%d juga ditolak oleh Stake. "
+                        "Bot dihentikan untuk mencegah infinite loop.",
+                        MIN_BET,
+                    )
+                    sys.exit(1)
         except Exception as exc:
             log.error("Bet gagal: %s — retry 5 detik…", exc)
             time.sleep(5)
@@ -292,12 +321,24 @@ def run_bot():
 
         log.info("       → %s | %s", "WIN 🟢" if won else "LOSE 🔴", stats_line())
 
+        # FIX #5: Cek reset threshold SETELAH bet ditempatkan
+        # → ronde berikutnya langsung dimulai dari STARTING_BET jika terlewati
+        if bet_amount > RESET_THRESHOLD + 1e-6:
+            log.info(
+                "↩  Bet Rp%d > threshold Rp%d — ronde berikutnya reset ke Rp%d & rotasi seed",
+                bet_amount, RESET_THRESHOLD, STARTING_BET,
+            )
+            current_bet = STARTING_BET
+            reset_seed()
+            _too_small_fallback_used = False
+
         # ── Jeda setiap N spin ────────────────────────────────────────────
         if total_rounds % PAUSE_SPIN_EVERY == 0:
             log.info("🔁 %d spin tercapai! | %s", total_rounds, stats_line())
             pause_countdown(PAUSE_SPIN_SECS, f"{total_rounds} Spin")
             current_bet = reset_session()
             ses_profit = 0.0; ses_wins = 0; ses_losses = 0
+            _too_small_fallback_used = False
             continue
 
         # ── Jeda profit sesi ──────────────────────────────────────────────
@@ -308,6 +349,7 @@ def run_bot():
                             f"Profit Rp{ses_profit:,.0f}")
             current_bet = reset_session()
             ses_profit = 0.0; ses_wins = 0; ses_losses = 0
+            _too_small_fallback_used = False
             continue
 
         # ── Jeda stop loss sesi ───────────────────────────────────────────
@@ -318,6 +360,7 @@ def run_bot():
                             f"Stop Loss Rp{abs(ses_profit):,.0f}")
             current_bet = reset_session()
             ses_profit = 0.0; ses_wins = 0; ses_losses = 0
+            _too_small_fallback_used = False
             continue
 
         time.sleep(BET_DELAY)
