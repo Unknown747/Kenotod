@@ -3,7 +3,7 @@ Stake.com Keno Bot
 ==================
 Strategi:
   - Starting Bet   : Rp160
-  - Reset Threshold: Rp160
+  - Reset Threshold: Rp500
   - WIN  → bet berikutnya × 0.78  (turun 22%)
   - LOSE → bet berikutnya × 1.25  (naik 25%)
 
@@ -39,7 +39,7 @@ log = logging.getLogger("keno-bot")
 # ─── Konfigurasi API ──────────────────────────────────────────────────────────
 API_KEY = os.environ.get("STAKE_API_KEY", "")
 if not API_KEY:
-    log.error("STAKE_API_KEY belum di-set. Jalankan setup.sh terlebih dahulu.")
+    log.error("STAKE_API_KEY belum di-set. Set via Replit Secrets atau buat file .env dengan setup.sh.")
     sys.exit(1)
 
 API_URL = "https://stake.com/_api/graphql"
@@ -181,7 +181,10 @@ def place_bet(amount_idr: float) -> dict:
         "risk":       "high",
     })
 
-    bet    = data["kenoBet"]
+    bet = data.get("kenoBet")
+    if not bet:
+        raise RuntimeError("kenoBet response kosong/null dari Stake API — kemungkinan saldo habis atau sesi expired")
+
     payout = float(bet.get("payout", 0))
     amount = float(bet.get("amount", amount_idr))
     profit = payout - amount

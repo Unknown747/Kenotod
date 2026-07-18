@@ -8,9 +8,9 @@ Semua logika identik dengan bot.py — semua angka dalam IDR:
 
 Perbedaan:
   • Tidak ada koneksi ke Stake — hasil disimulasikan lokal
-  • Saldo awal bohongan (default Rp500.000)
-  • Jeda dipersingkat → 3 detik
-  • Jumlah spin bisa diatur (default 50)
+  • Saldo awal bohongan (default Rp100.000)
+  • Jeda instant (PAUSE_SIM_SECS=0)
+  • Jumlah spin bisa diatur (default 500)
 """
 
 import random
@@ -111,7 +111,7 @@ def run_test():
     log.info("  Total spin   : %d", TOTAL_SPIN_TEST)
     log.info("=" * 65)
 
-    current_bet  = float(STARTING_BET)
+    current_bet  = STARTING_BET
     ses_profit   = 0.0
     ses_wins     = 0
     ses_losses   = 0
