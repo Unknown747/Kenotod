@@ -2,10 +2,8 @@
 Stake.com Keno Bot
 ==================
 Strategy:
-  - Starting Bet : Rp160  → $0.01 USD
-  - Target Profit: Rp320  → $0.02 USD
-  - Loss Limit   : Rp32000 → $2.00 USD
-  - Reset Threshold: Rp160 → $0.01 USD
+  - Starting Bet   : Rp160    → $0.01 USD
+  - Reset Threshold: Rp160    → $0.01 USD
 
 Bet adjustment per round:
   WIN  → next_bet × 0.78
@@ -14,9 +12,10 @@ Bet adjustment per round:
 Reset rule (checked BEFORE applying win/loss multiplier):
   If current_bet > reset_threshold → reset to starting_bet, rotate client seed
 
-Auto-stop:
-  net_profit ≥ target_profit  → stop + rotate seed
-  total_loss ≥ loss_limit     → stop
+Jeda otomatis (pause lalu lanjut):
+  session profit ≥ Rp5.000   → jeda 1 menit, reset sesi
+  session loss   ≥ Rp32.000  → jeda 5 menit, reset sesi
+  setiap 1.000 spin           → jeda 1 menit, lanjut
 """
 
 import os
@@ -63,13 +62,24 @@ IDR_PER_USD = 16_000
 KENO_SELECTIONS = [3, 7, 14, 22, 36]   # 5 spots
 
 # Betting parameters (USD)
-STARTING_BET   = 160   / IDR_PER_USD   # $0.01
-TARGET_PROFIT  = 320   / IDR_PER_USD   # $0.02
-LOSS_LIMIT     = 32_000 / IDR_PER_USD  # $2.00
-RESET_THRESHOLD = 160  / IDR_PER_USD   # $0.01
+STARTING_BET    = 160   / IDR_PER_USD   # $0.01
+RESET_THRESHOLD = 160   / IDR_PER_USD   # $0.01
 
 WIN_MULTIPLIER  = 0.78
 LOSE_MULTIPLIER = 1.25
+
+# ── Jeda otomatis ──────────────────────────────────────────────────────────
+PAUSE_PROFIT_IDR  = 5_000    # Jeda 1 menit jika profit sesi ≥ Rp5.000
+PAUSE_LOSS_IDR    = 32_000   # Jeda 5 menit jika loss sesi  ≥ Rp32.000
+PAUSE_SPIN_EVERY  = 1_000    # Jeda 1 menit setiap N spin
+
+PAUSE_PROFIT_SECS = 60       # 1 menit
+PAUSE_LOSS_SECS   = 300      # 5 menit
+PAUSE_SPIN_SECS   = 60       # 1 menit
+
+# Konversi ke USD untuk perbandingan internal
+PAUSE_PROFIT_USD  = PAUSE_PROFIT_IDR / IDR_PER_USD
+PAUSE_LOSS_USD    = PAUSE_LOSS_IDR   / IDR_PER_USD
 
 # Minimum bet Stake accepts (usually $0.0001 for USD)
 MIN_BET = 0.0001
@@ -199,99 +209,132 @@ def place_bet(amount_usd: float) -> dict:
 
 # ─── Main bot loop ──────────────────────────────────────────────────────────
 
+def pause_countdown(seconds: int, label: str):
+    """Tampilkan countdown jeda di terminal."""
+    log.info("⏸  %s — Jeda %d menit %d detik…",
+             label, seconds // 60, seconds % 60)
+    for remaining in range(seconds, 0, -10):
+        mins, secs = divmod(remaining, 60)
+        log.info("   ⏳ Lanjut dalam %02d:%02d …", mins, secs)
+        time.sleep(min(10, remaining))
+    log.info("▶  Jeda selesai — melanjutkan bot…")
+
+
+def reset_session(current_bet_ref):
+    """Reset statistik sesi dan kembalikan bet awal."""
+    log.info("🔄 Reset sesi — bet kembali ke Rp%.0f", STARTING_BET * IDR_PER_USD)
+    reset_seed()
+    return STARTING_BET   # current_bet baru
+
+
 def run_bot():
     log.info("=" * 60)
     log.info("  Stake Keno Bot starting")
-    log.info("  Selections  : %s", KENO_SELECTIONS)
-    log.info("  Start bet   : Rp%.0f ($%.4f)", STARTING_BET * IDR_PER_USD, STARTING_BET)
-    log.info("  Target gain : Rp%.0f ($%.4f)", TARGET_PROFIT * IDR_PER_USD, TARGET_PROFIT)
-    log.info("  Loss limit  : Rp%.0f ($%.2f)", LOSS_LIMIT * IDR_PER_USD, LOSS_LIMIT)
-    log.info("  Reset thresh: Rp%.0f ($%.4f)", RESET_THRESHOLD * IDR_PER_USD, RESET_THRESHOLD)
+    log.info("  Selections   : %s", KENO_SELECTIONS)
+    log.info("  Start bet    : Rp%.0f", STARTING_BET * IDR_PER_USD)
+    log.info("  Reset thresh : Rp%.0f", RESET_THRESHOLD * IDR_PER_USD)
+    log.info("  Jeda profit  : Rp%.0f → %d menit", PAUSE_PROFIT_IDR, PAUSE_PROFIT_SECS // 60)
+    log.info("  Jeda loss    : Rp%.0f → %d menit", PAUSE_LOSS_IDR, PAUSE_LOSS_SECS // 60)
+    log.info("  Jeda spin    : setiap %d spin → %d menit", PAUSE_SPIN_EVERY, PAUSE_SPIN_SECS // 60)
     log.info("=" * 60)
 
     # Initialise client seed
-    current_seed = reset_seed()
+    reset_seed()
 
-    current_bet  = STARTING_BET
-    net_profit   = 0.0
-    total_wager  = 0.0
-    wins         = 0
-    losses       = 0
-    round_num    = 0
+    current_bet    = STARTING_BET
+
+    # ── Statistik sesi (reset setiap jeda profit/loss) ──────────────────
+    ses_profit     = 0.0
+    ses_wins       = 0
+    ses_losses     = 0
+
+    # ── Statistik global (akumulasi sepanjang script jalan) ─────────────
+    total_wager    = 0.0
+    total_wins     = 0
+    total_losses   = 0
+    total_rounds   = 0
 
     def stats_line() -> str:
-        profit_idr = net_profit * IDR_PER_USD
+        profit_idr = ses_profit * IDR_PER_USD
         wager_idr  = total_wager * IDR_PER_USD
         profit_str = f"+{profit_idr:,.0f}" if profit_idr >= 0 else f"{profit_idr:,.0f}"
         return (
             f"Wager : Rp{wager_idr:,.0f}  |  "
             f"Profit : {profit_str}  |  "
-            f"W/L : {wins}/{losses}"
+            f"W/L : {total_wins}/{total_losses}"
         )
 
     while True:
-        round_num += 1
+        total_rounds += 1
 
-        # ── Determine next bet amount ────────────────────────────────────
-        # (Reset logic applied BEFORE win/loss multiplier)
+        # ── Reset taruhan jika melebihi threshold ────────────────────────
         if current_bet > RESET_THRESHOLD + 1e-9:
-            log.info("↩  Bet above reset threshold — resetting to starting bet & rotating seed")
+            log.info("↩  Reset bet ke Rp%.0f & rotasi seed", STARTING_BET * IDR_PER_USD)
             current_bet = STARTING_BET
-            current_seed = reset_seed()
+            reset_seed()
 
-        # Clamp to minimum
         bet_amount = max(round(current_bet, 8), MIN_BET)
 
         # ── Place bet ────────────────────────────────────────────────────
-        log.info("Round %d | Bet: Rp%.0f", round_num, bet_amount * IDR_PER_USD)
+        log.info("Spin #%d | Bet: Rp%.0f", total_rounds, bet_amount * IDR_PER_USD)
 
         try:
             result = place_bet(bet_amount)
         except Exception as exc:
-            log.error("Bet failed: %s — retrying in 5 s…", exc)
+            log.error("Bet gagal: %s — retry 5 detik…", exc)
             time.sleep(5)
             continue
 
-        profit_this_round = result["profit"]
-        net_profit   += profit_this_round
+        profit_ronde  = result["profit"]
+        ses_profit   += profit_ronde
         total_wager  += result["amount"]
-        won           = profit_this_round > 0
+        won           = profit_ronde > 0
 
         if won:
-            wins += 1
+            ses_wins    += 1
+            total_wins  += 1
+            current_bet  = current_bet * WIN_MULTIPLIER
         else:
-            losses += 1
+            ses_losses  += 1
+            total_losses += 1
+            current_bet  = current_bet * LOSE_MULTIPLIER
 
-        outcome = "WIN 🟢" if won else "LOSE 🔴"
-        log.info("       → %s | %s", outcome, stats_line())
+        log.info("       → %s | %s", "WIN 🟢" if won else "LOSE 🔴", stats_line())
 
-        # ── Stop conditions ──────────────────────────────────────────────
-        if net_profit >= TARGET_PROFIT:
-            log.info("🎯 Target profit reached!")
+        # ── Jeda setiap 1.000 spin ───────────────────────────────────────
+        if total_rounds % PAUSE_SPIN_EVERY == 0:
+            log.info("🔁 %d spin tercapai!", total_rounds)
             log.info("   %s", stats_line())
-            log.info("🔄 Rotating seed before exit…")
-            reset_seed()
-            log.info("✅ Bot stopped — target achieved.")
-            break
+            pause_countdown(PAUSE_SPIN_SECS, f"{total_rounds} Spin")
+            current_bet = reset_session(current_bet)
+            ses_profit  = 0.0
+            ses_wins    = 0
+            ses_losses  = 0
+            continue
 
-        if net_profit <= -LOSS_LIMIT:
-            log.info("🛑 Loss limit hit!")
+        # ── Jeda profit sesi ─────────────────────────────────────────────
+        if ses_profit >= PAUSE_PROFIT_USD:
+            log.info("🎯 Profit sesi Rp%.0f tercapai!", ses_profit * IDR_PER_USD)
             log.info("   %s", stats_line())
-            log.info("✅ Bot stopped — loss limit reached.")
-            break
+            pause_countdown(PAUSE_PROFIT_SECS, "Profit Rp{:,.0f}".format(ses_profit * IDR_PER_USD))
+            current_bet = reset_session(current_bet)
+            ses_profit  = 0.0
+            ses_wins    = 0
+            ses_losses  = 0
+            continue
 
-        # ── Adjust bet for next round ─────────────────────────────────
-        if won:
-            current_bet = current_bet * WIN_MULTIPLIER
-        else:
-            current_bet = current_bet * LOSE_MULTIPLIER
+        # ── Jeda stop loss sesi ──────────────────────────────────────────
+        if ses_profit <= -PAUSE_LOSS_USD:
+            log.info("🛑 Stop loss sesi Rp%.0f tercapai!", abs(ses_profit) * IDR_PER_USD)
+            log.info("   %s", stats_line())
+            pause_countdown(PAUSE_LOSS_SECS, "Stop Loss Rp{:,.0f}".format(abs(ses_profit) * IDR_PER_USD))
+            current_bet = reset_session(current_bet)
+            ses_profit  = 0.0
+            ses_wins    = 0
+            ses_losses  = 0
+            continue
 
         time.sleep(BET_DELAY)
-
-    log.info("=" * 60)
-    log.info("  %s", stats_line())
-    log.info("  Total rounds : %d", round_num)
-    log.info("=" * 60)
 
 
 if __name__ == "__main__":
