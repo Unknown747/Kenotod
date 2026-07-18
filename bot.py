@@ -212,9 +212,22 @@ def run_bot():
     # Initialise client seed
     current_seed = reset_seed()
 
-    current_bet = STARTING_BET
-    net_profit  = 0.0          # cumulative profit/loss
-    round_num   = 0
+    current_bet  = STARTING_BET
+    net_profit   = 0.0
+    total_wager  = 0.0
+    wins         = 0
+    losses       = 0
+    round_num    = 0
+
+    def stats_line() -> str:
+        profit_idr = net_profit * IDR_PER_USD
+        wager_idr  = total_wager * IDR_PER_USD
+        profit_str = f"+{profit_idr:,.0f}" if profit_idr >= 0 else f"{profit_idr:,.0f}"
+        return (
+            f"Wager : Rp{wager_idr:,.0f}  |  "
+            f"Profit : {profit_str}  |  "
+            f"W/L : {wins}/{losses}"
+        )
 
     while True:
         round_num += 1
@@ -230,14 +243,7 @@ def run_bot():
         bet_amount = max(round(current_bet, 8), MIN_BET)
 
         # ── Place bet ────────────────────────────────────────────────────
-        log.info(
-            "Round %d | Bet: Rp%.0f ($%.5f) | Net P/L: Rp%.0f ($%.5f)",
-            round_num,
-            bet_amount * IDR_PER_USD,
-            bet_amount,
-            net_profit * IDR_PER_USD,
-            net_profit,
-        )
+        log.info("Round %d | Bet: Rp%.0f", round_num, bet_amount * IDR_PER_USD)
 
         try:
             result = place_bet(bet_amount)
@@ -247,27 +253,30 @@ def run_bot():
             continue
 
         profit_this_round = result["profit"]
-        net_profit += profit_this_round
-        won = profit_this_round > 0
+        net_profit   += profit_this_round
+        total_wager  += result["amount"]
+        won           = profit_this_round > 0
 
-        log.info(
-            "       → %s | Payout: $%.5f | Round P/L: Rp%.0f | Net: Rp%.0f",
-            "WIN 🟢" if won else "LOSE 🔴",
-            result["payout"],
-            profit_this_round * IDR_PER_USD,
-            net_profit * IDR_PER_USD,
-        )
+        if won:
+            wins += 1
+        else:
+            losses += 1
+
+        outcome = "WIN 🟢" if won else "LOSE 🔴"
+        log.info("       → %s | %s", outcome, stats_line())
 
         # ── Stop conditions ──────────────────────────────────────────────
         if net_profit >= TARGET_PROFIT:
-            log.info("🎯 Target profit reached! Net gain: Rp%.0f ($%.4f)", net_profit * IDR_PER_USD, net_profit)
+            log.info("🎯 Target profit reached!")
+            log.info("   %s", stats_line())
             log.info("🔄 Rotating seed before exit…")
             reset_seed()
             log.info("✅ Bot stopped — target achieved.")
             break
 
         if net_profit <= -LOSS_LIMIT:
-            log.info("🛑 Loss limit hit! Net loss: Rp%.0f ($%.2f)", abs(net_profit) * IDR_PER_USD, abs(net_profit))
+            log.info("🛑 Loss limit hit!")
+            log.info("   %s", stats_line())
             log.info("✅ Bot stopped — loss limit reached.")
             break
 
@@ -280,7 +289,7 @@ def run_bot():
         time.sleep(BET_DELAY)
 
     log.info("=" * 60)
-    log.info("  Final net P/L: Rp%.0f ($%.5f)", net_profit * IDR_PER_USD, net_profit)
+    log.info("  %s", stats_line())
     log.info("  Total rounds : %d", round_num)
     log.info("=" * 60)
 
