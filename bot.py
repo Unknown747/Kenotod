@@ -146,12 +146,14 @@ mutation KenoBet(
   $currency: CurrencyEnum!
   $identifier: String!
   $numbers: [Int!]!
+  $risk: CasinoGameKenoRisk!
 ) {
   kenoBet(
     amount: $amount
     currency: $currency
     identifier: $identifier
     numbers: $numbers
+    risk: $risk
   ) {
     id
     amount
@@ -188,6 +190,7 @@ def place_bet(amount_usd: float) -> dict:
         "currency":   CURRENCY,
         "identifier": identifier,
         "numbers":    KENO_SELECTIONS,
+        "risk":       "high",
     })
 
     bet = data["kenoBet"]

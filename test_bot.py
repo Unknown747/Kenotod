@@ -48,16 +48,18 @@ SALDO_AWAL_IDR  = 500_000              # Rp500.000 saldo bohongan
 TOTAL_SPIN_TEST = 50                   # Jumlah spin simulasi
 PAUSE_SIM_SECS  = 3                    # Semua jeda diperpendek jadi 3 detik
 
-# ─── Tabel payout Keno 5-spot (Stake) ─────────────────────────────────────────
+# ─── Tabel payout Keno 5-spot, Risk: HIGH (Stake) ────────────────────────────
+# Difficulty high → multiplier lebih besar, tapi hit rate lebih rendah
 # matches → multiplier (berapa kali lipat dari bet)
 KENO_PAYOUT = {
     0: 0.0,
     1: 0.0,
     2: 0.0,
-    3: 2.0,
-    4: 10.0,
-    5: 500.0,
+    3: 3.0,
+    4: 30.0,
+    5: 1000.0,
 }
+KENO_RISK = "high"
 
 # ─── Simulasi Keno draw ───────────────────────────────────────────────────────
 
@@ -121,6 +123,7 @@ def run_test():
     log.info("  [TEST MODE] Stake Keno Bot — Simulasi Tanpa API")
     log.info("  Saldo awal   : Rp%s  ($%.2f)", f"{SALDO_AWAL_IDR:,}", balance_usd)
     log.info("  Picks        : %s", KENO_SELECTIONS)
+    log.info("  Difficulty   : %s", KENO_RISK.upper())
     log.info("  Start bet    : Rp%.0f", STARTING_BET * IDR_PER_USD)
     log.info("  Reset thresh : Rp%.0f", RESET_THRESHOLD * IDR_PER_USD)
     log.info("  Jeda profit  : Rp%s  → %d dtk (sim)", f"{PAUSE_PROFIT_IDR:,}", PAUSE_SIM_SECS)
