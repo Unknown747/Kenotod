@@ -26,6 +26,9 @@ import random
 import string
 import logging
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()  # Baca variabel dari file .env
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
