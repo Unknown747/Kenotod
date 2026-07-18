@@ -29,7 +29,7 @@ log = logging.getLogger("keno-test")
 
 # ─── Konfigurasi (sama persis dengan bot.py) ─────────────────────────────────
 IDR_PER_USD     = 16_000
-KENO_SELECTIONS = [3, 7, 14, 22, 36]   # 5 spot
+KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]   # 10 spot
 
 STARTING_BET    = 160   / IDR_PER_USD
 RESET_THRESHOLD = 160   / IDR_PER_USD
@@ -48,16 +48,21 @@ SALDO_AWAL_IDR  = 500_000              # Rp500.000 saldo bohongan
 TOTAL_SPIN_TEST = 50                   # Jumlah spin simulasi
 PAUSE_SIM_SECS  = 3                    # Semua jeda diperpendek jadi 3 detik
 
-# ─── Tabel payout Keno 5-spot, Risk: HIGH (Stake) ────────────────────────────
-# Difficulty high → multiplier lebih besar, tapi hit rate lebih rendah
+# ─── Tabel payout Keno 10-spot, Risk: HIGH (Stake) ───────────────────────────
+# Sesuai screenshot: 10 angka dipilih, difficulty high
 # matches → multiplier (berapa kali lipat dari bet)
 KENO_PAYOUT = {
-    0: 0.0,
-    1: 0.0,
-    2: 0.0,
-    3: 3.0,
-    4: 30.0,
-    5: 1000.0,
+    0:  0.0,
+    1:  0.0,
+    2:  0.0,
+    3:  1.6,
+    4:  2.0,
+    5:  4.0,
+    6:  7.0,
+    7:  26.0,
+    8:  100.0,
+    9:  500.0,
+    10: 1000.0,
 }
 KENO_RISK = "high"
 
@@ -187,11 +192,12 @@ def run_test():
 
         outcome = "WIN 🟢" if won else "LOSE 🔴"
         log.info(
-            "Spin #%d | Bet: Rp%.0f | %s | Match: %d/5 (×%.0f) | Saldo: Rp%s",
+            "Spin #%d | Bet: Rp%.0f | %s | Match: %d/%d (×%.0f) | Saldo: Rp%s",
             total_rounds,
             bet_amount * IDR_PER_USD,
             outcome,
             result["matches"],
+            len(KENO_SELECTIONS),
             result["mult"],
             f"{balance_usd * IDR_PER_USD:,.0f}",
         )

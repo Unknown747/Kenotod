@@ -59,7 +59,7 @@ IDR_PER_USD = 16_000
 
 # Keno spot selection (1–10 numbers from 1–40).
 # Adjust these to match your preferred picks.
-KENO_SELECTIONS = [3, 7, 14, 22, 36]   # 5 spots
+KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]   # 10 spots
 
 # Betting parameters (USD)
 STARTING_BET    = 160   / IDR_PER_USD   # $0.01
