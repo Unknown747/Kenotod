@@ -40,9 +40,9 @@ PAUSE_LOSS      = 32_000
 PAUSE_SPIN_EVERY = 1_000
 
 # ─── Pengaturan TEST ──────────────────────────────────────────────────────────
-SALDO_AWAL      = 500_000   # Rp500.000
-TOTAL_SPIN_TEST = 50
-PAUSE_SIM_SECS  = 3         # Jeda diperpendek untuk testing
+SALDO_AWAL      = 100_000   # Rp100.000 — sama dengan live
+TOTAL_SPIN_TEST = 500       # 500 spin
+PAUSE_SIM_SECS  = 0         # Instant — tidak perlu tunggu di simulasi
 
 # ─── Tabel payout Keno 10-spot, Risk: HIGH ───────────────────────────────────
 # Sesuai screenshot — matches → multiplier
