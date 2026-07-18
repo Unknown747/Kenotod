@@ -50,6 +50,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
 }
 
+# Session persisten — TCP connection di-reuse antar request, hemat ~50-80ms/spin
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
 # ─── Konfigurasi Bot (semua dalam IDR) ───────────────────────────────────────
 # Currency — huruf kecil, sesuai CurrencyEnum Stake
 CURRENCY = "idr"
@@ -74,8 +78,8 @@ PAUSE_PROFIT_SECS = 60
 PAUSE_LOSS_SECS   = 300
 PAUSE_SPIN_SECS   = 60
 
-# Delay antar bet (detik)
-BET_DELAY = 1.0
+# Delay antar bet (detik) — 0 = instant, naikkan ke 0.3 jika kena rate limit
+BET_DELAY = 0
 
 # Batas spin untuk testing (0 = unlimited / mode live)
 MAX_SPINS = int(os.environ.get("MAX_SPINS", "0"))
@@ -90,7 +94,7 @@ _TOO_SMALL_KEYWORDS = ("too small", "minimum", "minim", "terlalu kecil", "below"
 def _gql(query: str, variables: dict) -> dict:
     payload = {"query": query, "variables": variables}
     try:
-        resp = requests.post(API_URL, json=payload, headers=HEADERS, timeout=15)
+        resp = SESSION.post(API_URL, json=payload, timeout=15)
         if not resp.ok:
             log.error("HTTP %s — %s", resp.status_code, resp.text[:400])
             resp.raise_for_status()
