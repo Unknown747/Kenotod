@@ -77,6 +77,9 @@ PAUSE_SPIN_SECS   = 60
 # Delay antar bet (detik)
 BET_DELAY = 1.0
 
+# Batas spin untuk testing (0 = unlimited / mode live)
+MAX_SPINS = int(os.environ.get("MAX_SPINS", "0"))
+
 # ─── Exception khusus ────────────────────────────────────────────────────────
 class BetTooSmallError(Exception):
     """Stake menolak bet karena jumlahnya di bawah minimum."""
@@ -132,7 +135,7 @@ mutation KenoBet(
   $currency: CurrencyEnum!
   $identifier: String!
   $numbers: [Int!]!
-  $risk: CasinoGameKenoRisk!
+  $risk: CasinoGameKenoRiskEnum!
 ) {
   kenoBet(
     amount: $amount
@@ -255,7 +258,7 @@ def run_bot():
     # FIX #2: Lacak apakah STARTING_BET sudah pernah gagal agar tidak infinite loop
     _too_small_fallback_used = False
 
-    while True:
+    while MAX_SPINS == 0 or total_rounds < MAX_SPINS:
         total_rounds += 1
 
         # ── Guard: bet terlalu kecil akibat win streak ────────────────────
