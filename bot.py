@@ -81,7 +81,9 @@ def _gql(query: str, variables: dict) -> dict:
     payload = {"query": query, "variables": variables}
     try:
         response = requests.post(API_URL, json=payload, headers=HEADERS, timeout=15)
-        response.raise_for_status()
+        if not response.ok:
+            log.error("HTTP %s — body: %s", response.status_code, response.text[:500])
+            response.raise_for_status()
     except requests.RequestException as exc:
         log.error("HTTP error: %s", exc)
         raise
@@ -102,10 +104,9 @@ def _random_seed(length: int = 32) -> str:
 
 
 UPDATE_SEED_MUTATION = """
-mutation UpdateClientSeed($seed: String!) {
-  updateClientSeed(seed: $seed) {
-    clientSeed
-    nextServerSeedHash
+mutation ChangeClientSeed($seed: String!) {
+  changeClientSeed(seed: $seed) {
+    seed
   }
 }
 """
@@ -119,7 +120,7 @@ def reset_seed() -> str:
     new_seed = _random_seed()
     log.info("🔄 Rotating client seed → %s…", new_seed[:8] + "…")
     data = _gql(UPDATE_SEED_MUTATION, {"seed": new_seed})
-    applied = data.get("updateClientSeed", {}).get("clientSeed", new_seed)
+    applied = data.get("changeClientSeed", {}).get("seed", new_seed)
     log.info("   Seed updated: %s", applied[:8] + "…")
     return applied
 
@@ -131,34 +132,27 @@ mutation KenoBet(
   $amount: Float!
   $currency: CurrencyEnum!
   $identifier: String!
-  $clientSeed: String!
-  $selections: [Int!]!
+  $numbers: [Int!]!
 ) {
-  kenobet(
+  kenoBet(
     amount: $amount
     currency: $currency
     identifier: $identifier
-    clientSeed: $clientSeed
-    selections: $selections
+    numbers: $numbers
   ) {
-    bet {
-      id
-      amount
-      payout
-      profit
-      state {
-        ... on CasinoGameKeno {
-          result
-          selections
-          payoutMultiplier
-        }
+    id
+    amount
+    payout
+    state {
+      ... on CasinoGameKeno {
+        __typename
       }
-      user {
-        balances {
-          available {
-            amount
-            currency
-          }
+    }
+    user {
+      balances {
+        available {
+          amount
+          currency
         }
       }
     }
@@ -167,35 +161,36 @@ mutation KenoBet(
 """
 
 
-def place_bet(amount_usd: float, client_seed: str) -> dict:
+def place_bet(amount_usd: float) -> dict:
     """
     Place a single Keno bet and return the parsed result dict:
-      { 'id', 'amount', 'payout', 'profit', 'multiplier', 'result', 'balance' }
+      { 'id', 'amount', 'payout', 'profit', 'multiplier', 'balance' }
+    The active client seed (set via changeClientSeed) is used automatically.
     """
     amount_usd = max(round(amount_usd, 8), MIN_BET)
     identifier = _random_seed(16)        # unique nonce per bet
 
     data = _gql(KENO_BET_MUTATION, {
-        "amount":      amount_usd,
-        "currency":    CURRENCY,
-        "identifier":  identifier,
-        "clientSeed":  client_seed,
-        "selections":  KENO_SELECTIONS,
+        "amount":     amount_usd,
+        "currency":   CURRENCY,
+        "identifier": identifier,
+        "numbers":    KENO_SELECTIONS,
     })
 
-    bet = data["kenobet"]["bet"]
-    state = bet.get("state", {})
+    bet = data["kenoBet"]
+    payout   = float(bet.get("payout", 0))
+    amount   = float(bet.get("amount", amount_usd))
+    profit   = payout - amount          # API has no 'profit' field; derive it
+
     balances = bet.get("user", {}).get("balances", [{}])
-    balance = balances[0].get("available", {}).get("amount", 0) if balances else 0
+    balance  = balances[0].get("available", {}).get("amount", 0) if balances else 0
 
     return {
-        "id":         bet["id"],
-        "amount":     float(bet["amount"]),
-        "payout":     float(bet["payout"]),
-        "profit":     float(bet["profit"]),
-        "multiplier": float(state.get("payoutMultiplier", 0)),
-        "result":     state.get("result", []),
-        "balance":    float(balance),
+        "id":      bet["id"],
+        "amount":  amount,
+        "payout":  payout,
+        "profit":  profit,
+        "balance": float(balance),
     }
 
 
@@ -242,7 +237,7 @@ def run_bot():
         )
 
         try:
-            result = place_bet(bet_amount, current_seed)
+            result = place_bet(bet_amount)
         except Exception as exc:
             log.error("Bet failed: %s — retrying in 5 s…", exc)
             time.sleep(5)
@@ -253,10 +248,9 @@ def run_bot():
         won = profit_this_round > 0
 
         log.info(
-            "       → %s | Payout: $%.5f | Multiplier: %.2fx | Round P/L: Rp%.0f | Net: Rp%.0f",
+            "       → %s | Payout: $%.5f | Round P/L: Rp%.0f | Net: Rp%.0f",
             "WIN 🟢" if won else "LOSE 🔴",
             result["payout"],
-            result["multiplier"],
             profit_this_round * IDR_PER_USD,
             net_profit * IDR_PER_USD,
         )
