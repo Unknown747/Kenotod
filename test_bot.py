@@ -68,7 +68,8 @@ def simulate_keno(picks: list) -> dict:
     return {"drawn": sorted(drawn), "matches": matches, "mult": mult}
 
 def sim_bet(amount_idr: float, balance: float) -> dict:
-    amount_idr = max(round(amount_idr, 2), MIN_BET)
+    # FIX #1 (sync): IDR tidak pakai desimal — integer bulat, sesuai bot.py
+    amount_idr = max(int(round(amount_idr)), MIN_BET)
     keno       = simulate_keno(KENO_SELECTIONS)
     payout     = round(amount_idr * keno["mult"], 2)
     profit     = round(payout - amount_idr, 2)
@@ -119,31 +120,28 @@ def run_test():
     total_losses = 0
     total_rounds = 0
 
+    # FIX #4 (sync): tampilkan ses_wins/ses_losses sesi + total, sesuai bot.py
     def stats_line() -> str:
         p = ses_profit
         profit_str = f"+Rp{p:,.0f}" if p >= 0 else f"-Rp{abs(p):,.0f}"
         return (
             f"Wager : Rp{total_wager:,.0f}  |  "
             f"Profit : {profit_str}  |  "
-            f"W/L : {total_wins}/{total_losses}"
+            f"Sesi W/L : {ses_wins}/{ses_losses}  |  "
+            f"Total W/L : {total_wins}/{total_losses}"
         )
 
     while total_rounds < TOTAL_SPIN_TEST:
         total_rounds += 1
 
-        # ── Reset jika bet > threshold (akibat loss streak) ───────────────
-        if current_bet > RESET_THRESHOLD + 1e-6:
-            log.info("↩  Bet Rp%.0f > threshold — reset ke Rp%d",
-                     current_bet, STARTING_BET)
-            current_bet = STARTING_BET
-
-        # ── Reset jika bet < minimum (akibat win streak) ──────────────────
+        # ── Guard: bet terlalu kecil akibat win streak ───────────────────
         if current_bet < MIN_BET - 1e-6:
             log.warning("⚠️  Bet Rp%.2f di bawah minimum — reset ke Rp%d",
                         current_bet, STARTING_BET)
             current_bet = STARTING_BET
 
-        bet_amount = round(current_bet, 2)
+        # FIX #1 (sync): integer bulat untuk IDR
+        bet_amount = int(round(current_bet))
 
         if balance < bet_amount:
             log.warning("💸 Saldo tidak cukup! Saldo: Rp%s | Bet: Rp%d",
@@ -178,6 +176,12 @@ def run_test():
             f"{balance:,.0f}",
         )
         log.info("         %s", stats_line())
+
+        # FIX #5 (sync): cek reset threshold SETELAH bet — sesuai bot.py
+        if bet_amount > RESET_THRESHOLD + 1e-6:
+            log.info("↩  Bet Rp%d > threshold Rp%d — ronde berikutnya reset ke Rp%d",
+                     bet_amount, RESET_THRESHOLD, STARTING_BET)
+            current_bet = STARTING_BET
 
         # ── Jeda setiap N spin ────────────────────────────────────────────
         if total_rounds % PAUSE_SPIN_EVERY == 0:
