@@ -1,21 +1,19 @@
 """
 Stake.com Keno Bot
 ==================
-Strategy:
-  - Starting Bet   : Rp160    → $0.01 USD
-  - Reset Threshold: Rp160    → $0.01 USD
+Strategi:
+  - Starting Bet   : Rp160
+  - Reset Threshold: Rp160
+  - WIN  → bet berikutnya × 0.78  (turun 22%)
+  - LOSE → bet berikutnya × 1.25  (naik 25%)
 
-Bet adjustment per round:
-  WIN  → next_bet × 0.78
-  LOSE → next_bet × 1.25
-
-Reset rule (checked BEFORE applying win/loss multiplier):
-  If current_bet > reset_threshold → reset to starting_bet, rotate client seed
+Reset rule (dicek SEBELUM perubahan ×):
+  Jika bet > reset_threshold → reset ke starting_bet, rotasi seed
 
 Jeda otomatis (pause lalu lanjut):
-  session profit ≥ Rp5.000   → jeda 1 menit, reset sesi
-  session loss   ≥ Rp32.000  → jeda 5 menit, reset sesi
-  setiap 1.000 spin           → jeda 1 menit, lanjut
+  profit sesi ≥ Rp5.000  → jeda 1 menit, reset sesi
+  loss sesi   ≥ Rp32.000 → jeda 5 menit, reset sesi
+  setiap 1.000 spin       → jeda 1 menit, lanjut
 """
 
 import os
@@ -27,9 +25,9 @@ import logging
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()  # Baca variabel dari file .env
+load_dotenv()
 
-# ─── Logging ────────────────────────────────────────────────────────────────
+# ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
@@ -37,10 +35,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("keno-bot")
 
-# ─── Configuration ──────────────────────────────────────────────────────────
+# ─── Konfigurasi API ──────────────────────────────────────────────────────────
 API_KEY = os.environ.get("STAKE_API_KEY", "")
 if not API_KEY:
-    log.error("STAKE_API_KEY environment variable is not set. Exiting.")
+    log.error("STAKE_API_KEY belum di-set. Jalankan setup.sh terlebih dahulu.")
     sys.exit(1)
 
 API_URL = "https://stake.com/_api/graphql"
@@ -51,67 +49,52 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
 }
 
-# Currency on Stake — harus huruf kecil sesuai CurrencyEnum API
-# Sesuaikan dengan currency akun kamu (lihat saldo di Stake)
-# Contoh: "trx", "eth", "btc", "usdt", "ltc", "doge", "xrp", "bnb"
-CURRENCY = "trx"
+# ─── Konfigurasi Bot (semua dalam IDR) ───────────────────────────────────────
+# Currency — huruf kecil, sesuai CurrencyEnum Stake
+CURRENCY = "idr"
 
-# IDR → USD conversion
-IDR_PER_USD = 16_000
+# Angka keno yang dipilih (10 spot, 1–40)
+KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]
 
-# Keno spot selection (1–10 numbers from 1–40).
-# Adjust these to match your preferred picks.
-KENO_SELECTIONS = [12, 13, 19, 20, 21, 22, 27, 28, 29, 30]   # 10 spots
-
-# Betting parameters (USD)
-STARTING_BET    = 160   / IDR_PER_USD   # $0.01
-RESET_THRESHOLD = 160   / IDR_PER_USD   # $0.01
+# Bet (IDR)
+STARTING_BET    = 160      # Rp160
+RESET_THRESHOLD = 160      # Rp160
+MIN_BET         = 100      # Batas minimum — jika di bawah ini, reset ke STARTING_BET
 
 WIN_MULTIPLIER  = 0.78
 LOSE_MULTIPLIER = 1.25
 
-# ── Jeda otomatis ──────────────────────────────────────────────────────────
-PAUSE_PROFIT_IDR  = 5_000    # Jeda 1 menit jika profit sesi ≥ Rp5.000
-PAUSE_LOSS_IDR    = 32_000   # Jeda 5 menit jika loss sesi  ≥ Rp32.000
-PAUSE_SPIN_EVERY  = 1_000    # Jeda 1 menit setiap N spin
+# Jeda otomatis (IDR)
+PAUSE_PROFIT    = 5_000    # Rp5.000  → jeda 1 menit
+PAUSE_LOSS      = 32_000   # Rp32.000 → jeda 5 menit
+PAUSE_SPIN_EVERY = 1_000   # setiap 1.000 spin → jeda 1 menit
 
-PAUSE_PROFIT_SECS = 60       # 1 menit
-PAUSE_LOSS_SECS   = 300      # 5 menit
-PAUSE_SPIN_SECS   = 60       # 1 menit
+PAUSE_PROFIT_SECS = 60
+PAUSE_LOSS_SECS   = 300
+PAUSE_SPIN_SECS   = 60
 
-# Konversi ke USD untuk perbandingan internal
-PAUSE_PROFIT_USD  = PAUSE_PROFIT_IDR / IDR_PER_USD
-PAUSE_LOSS_USD    = PAUSE_LOSS_IDR   / IDR_PER_USD
-
-# Minimum bet Stake accepts (usually $0.0001 for USD)
-MIN_BET = 0.0001
-
-# Delay between bets (seconds) – be kind to the API
+# Delay antar bet (detik)
 BET_DELAY = 1.0
 
-# ─── GraphQL helpers ────────────────────────────────────────────────────────
-
+# ─── Exception khusus ────────────────────────────────────────────────────────
 class BetTooSmallError(Exception):
     """Stake menolak bet karena jumlahnya di bawah minimum."""
 
-
-# Kata kunci error "amount too small" dari Stake API
 _TOO_SMALL_KEYWORDS = ("too small", "minimum", "minim", "terlalu kecil", "below")
 
-
+# ─── GraphQL helper ───────────────────────────────────────────────────────────
 def _gql(query: str, variables: dict) -> dict:
-    """Execute a GraphQL request and return the 'data' portion."""
     payload = {"query": query, "variables": variables}
     try:
-        response = requests.post(API_URL, json=payload, headers=HEADERS, timeout=15)
-        if not response.ok:
-            log.error("HTTP %s — body: %s", response.status_code, response.text[:500])
-            response.raise_for_status()
+        resp = requests.post(API_URL, json=payload, headers=HEADERS, timeout=15)
+        if not resp.ok:
+            log.error("HTTP %s — %s", resp.status_code, resp.text[:400])
+            resp.raise_for_status()
     except requests.RequestException as exc:
         log.error("HTTP error: %s", exc)
         raise
 
-    result = response.json()
+    result = resp.json()
     if "errors" in result:
         msgs = " ".join(e.get("message", "").lower() for e in result["errors"])
         if any(k in msgs for k in _TOO_SMALL_KEYWORDS):
@@ -120,16 +103,12 @@ def _gql(query: str, variables: dict) -> dict:
         raise RuntimeError(f"GraphQL error: {result['errors']}")
     return result.get("data", {})
 
-
-# ─── Seed management ────────────────────────────────────────────────────────
-
+# ─── Seed management ──────────────────────────────────────────────────────────
 def _random_seed(length: int = 32) -> str:
-    """Generate a cryptographically adequate random alphanumeric string."""
     alphabet = string.ascii_letters + string.digits
     return "".join(random.SystemRandom().choice(alphabet) for _ in range(length))
 
-
-UPDATE_SEED_MUTATION = """
+CHANGE_SEED_MUTATION = """
 mutation ChangeClientSeed($seed: String!) {
   changeClientSeed(seed: $seed) {
     seed
@@ -137,22 +116,15 @@ mutation ChangeClientSeed($seed: String!) {
 }
 """
 
-
 def reset_seed() -> str:
-    """
-    Rotate the client seed on Stake via API.
-    Returns the new seed string that was applied.
-    """
     new_seed = _random_seed()
-    log.info("🔄 Rotating client seed → %s…", new_seed[:8] + "…")
-    data = _gql(UPDATE_SEED_MUTATION, {"seed": new_seed})
+    log.info("🔄 Rotasi seed → %s…", new_seed[:8] + "…")
+    data    = _gql(CHANGE_SEED_MUTATION, {"seed": new_seed})
     applied = data.get("changeClientSeed", {}).get("seed", new_seed)
-    log.info("   Seed updated: %s", applied[:8] + "…")
+    log.info("   Seed aktif : %s…", applied[:8])
     return applied
 
-
-# ─── Keno bet ───────────────────────────────────────────────────────────────
-
+# ─── Keno bet ─────────────────────────────────────────────────────────────────
 KENO_BET_MUTATION = """
 mutation KenoBet(
   $amount: Float!
@@ -188,94 +160,85 @@ mutation KenoBet(
 }
 """
 
-
-def place_bet(amount_usd: float) -> dict:
+def place_bet(amount_idr: float) -> dict:
     """
-    Place a single Keno bet and return the parsed result dict:
-      { 'id', 'amount', 'payout', 'profit', 'multiplier', 'balance' }
-    The active client seed (set via changeClientSeed) is used automatically.
+    Pasang satu bet Keno. Amount dalam IDR.
+    Return: { id, amount, payout, profit, balance }  ← semua dalam IDR
     """
-    amount_usd = max(round(amount_usd, 8), MIN_BET)
-    identifier = _random_seed(16)        # unique nonce per bet
+    amount_idr = max(round(amount_idr, 2), MIN_BET)
+    identifier = _random_seed(16)
 
     data = _gql(KENO_BET_MUTATION, {
-        "amount":     amount_usd,
+        "amount":     amount_idr,
         "currency":   CURRENCY,
         "identifier": identifier,
         "numbers":    KENO_SELECTIONS,
         "risk":       "high",
     })
 
-    bet = data["kenoBet"]
-    payout   = float(bet.get("payout", 0))
-    amount   = float(bet.get("amount", amount_usd))
-    profit   = payout - amount          # API has no 'profit' field; derive it
+    bet    = data["kenoBet"]
+    payout = float(bet.get("payout", 0))
+    amount = float(bet.get("amount", amount_idr))
+    profit = payout - amount
 
     balances = bet.get("user", {}).get("balances", [{}])
-    balance  = balances[0].get("available", {}).get("amount", 0) if balances else 0
+    balance  = float(balances[0].get("available", {}).get("amount", 0)) if balances else 0
 
     return {
         "id":      bet["id"],
         "amount":  amount,
         "payout":  payout,
         "profit":  profit,
-        "balance": float(balance),
+        "balance": balance,
     }
 
-
-# ─── Main bot loop ──────────────────────────────────────────────────────────
-
+# ─── Countdown jeda ───────────────────────────────────────────────────────────
 def pause_countdown(seconds: int, label: str):
-    """Tampilkan countdown jeda di terminal."""
-    log.info("⏸  %s — Jeda %d menit %d detik…",
-             label, seconds // 60, seconds % 60)
+    log.info("⏸  %s — Jeda %d menit %d detik…", label, seconds // 60, seconds % 60)
     for remaining in range(seconds, 0, -10):
-        mins, secs = divmod(remaining, 60)
-        log.info("   ⏳ Lanjut dalam %02d:%02d …", mins, secs)
+        m, s = divmod(remaining, 60)
+        log.info("   ⏳ Lanjut dalam %02d:%02d …", m, s)
         time.sleep(min(10, remaining))
     log.info("▶  Jeda selesai — melanjutkan bot…")
 
-
-def reset_session(current_bet_ref):
-    """Reset statistik sesi dan kembalikan bet awal."""
-    log.info("🔄 Reset sesi — bet kembali ke Rp%.0f", STARTING_BET * IDR_PER_USD)
+def reset_session():
+    log.info("🔄 Reset sesi — bet kembali ke Rp%d", STARTING_BET)
     reset_seed()
-    return STARTING_BET   # current_bet baru
+    return STARTING_BET
 
-
+# ─── Main bot loop ────────────────────────────────────────────────────────────
 def run_bot():
     log.info("=" * 60)
-    log.info("  Stake Keno Bot starting")
+    log.info("  Stake Keno Bot")
+    log.info("  Currency     : %s", CURRENCY.upper())
     log.info("  Selections   : %s", KENO_SELECTIONS)
-    log.info("  Start bet    : Rp%.0f", STARTING_BET * IDR_PER_USD)
-    log.info("  Reset thresh : Rp%.0f", RESET_THRESHOLD * IDR_PER_USD)
-    log.info("  Jeda profit  : Rp%.0f → %d menit", PAUSE_PROFIT_IDR, PAUSE_PROFIT_SECS // 60)
-    log.info("  Jeda loss    : Rp%.0f → %d menit", PAUSE_LOSS_IDR, PAUSE_LOSS_SECS // 60)
+    log.info("  Start bet    : Rp%d", STARTING_BET)
+    log.info("  Reset thresh : Rp%d", RESET_THRESHOLD)
+    log.info("  Jeda profit  : Rp%s → %d menit", f"{PAUSE_PROFIT:,}", PAUSE_PROFIT_SECS // 60)
+    log.info("  Jeda loss    : Rp%s → %d menit", f"{PAUSE_LOSS:,}", PAUSE_LOSS_SECS // 60)
     log.info("  Jeda spin    : setiap %d spin → %d menit", PAUSE_SPIN_EVERY, PAUSE_SPIN_SECS // 60)
     log.info("=" * 60)
 
-    # Initialise client seed
     reset_seed()
 
-    current_bet    = STARTING_BET
+    current_bet  = STARTING_BET
 
-    # ── Statistik sesi (reset setiap jeda profit/loss) ──────────────────
-    ses_profit     = 0.0
-    ses_wins       = 0
-    ses_losses     = 0
+    # Statistik sesi (reset tiap jeda profit/loss)
+    ses_profit   = 0.0
+    ses_wins     = 0
+    ses_losses   = 0
 
-    # ── Statistik global (akumulasi sepanjang script jalan) ─────────────
-    total_wager    = 0.0
-    total_wins     = 0
-    total_losses   = 0
-    total_rounds   = 0
+    # Statistik global
+    total_wager  = 0.0
+    total_wins   = 0
+    total_losses = 0
+    total_rounds = 0
 
     def stats_line() -> str:
-        profit_idr = ses_profit * IDR_PER_USD
-        wager_idr  = total_wager * IDR_PER_USD
-        profit_str = f"+{profit_idr:,.0f}" if profit_idr >= 0 else f"{profit_idr:,.0f}"
+        p = ses_profit
+        profit_str = f"+Rp{p:,.0f}" if p >= 0 else f"-Rp{abs(p):,.0f}"
         return (
-            f"Wager : Rp{wager_idr:,.0f}  |  "
+            f"Wager : Rp{total_wager:,.0f}  |  "
             f"Profit : {profit_str}  |  "
             f"W/L : {total_wins}/{total_losses}"
         )
@@ -283,34 +246,29 @@ def run_bot():
     while True:
         total_rounds += 1
 
-        # ── Reset taruhan jika melebihi threshold ────────────────────────
-        if current_bet > RESET_THRESHOLD + 1e-9:
-            log.info("↩  Reset bet ke Rp%.0f & rotasi seed", STARTING_BET * IDR_PER_USD)
+        # ── Reset jika bet melebihi threshold (akibat loss streak) ───────
+        if current_bet > RESET_THRESHOLD + 1e-6:
+            log.info("↩  Bet Rp%.0f > threshold — reset ke Rp%d & rotasi seed",
+                     current_bet, STARTING_BET)
             current_bet = STARTING_BET
             reset_seed()
 
-        # ── Proactive: bet terlalu kecil → reset ke base ─────────────────
-        if current_bet < MIN_BET - 1e-10:
-            log.warning(
-                "⚠️  Bet Rp%.4f di bawah minimum — reset ke base Rp%.0f",
-                current_bet * IDR_PER_USD,
-                STARTING_BET * IDR_PER_USD,
-            )
+        # ── Proactive: bet terlalu kecil (akibat win streak) ─────────────
+        if current_bet < MIN_BET - 1e-6:
+            log.warning("⚠️  Bet Rp%.2f di bawah minimum — reset ke Rp%d",
+                        current_bet, STARTING_BET)
             current_bet = STARTING_BET
 
-        bet_amount = round(current_bet, 8)
+        bet_amount = round(current_bet, 2)
 
-        # ── Place bet ────────────────────────────────────────────────────
-        log.info("Spin #%d | Bet: Rp%.0f", total_rounds, bet_amount * IDR_PER_USD)
+        log.info("Spin #%d | Bet: Rp%d", total_rounds, bet_amount)
 
+        # ── Pasang bet ────────────────────────────────────────────────────
         try:
             result = place_bet(bet_amount)
         except BetTooSmallError:
-            log.warning(
-                "⚠️  Amount too small (Rp%.4f) — reset ke base Rp%.0f & lanjut",
-                bet_amount * IDR_PER_USD,
-                STARTING_BET * IDR_PER_USD,
-            )
+            log.warning("⚠️  Amount too small (Rp%.2f) — reset ke Rp%d",
+                        bet_amount, STARTING_BET)
             current_bet = STARTING_BET
             continue
         except Exception as exc:
@@ -334,37 +292,32 @@ def run_bot():
 
         log.info("       → %s | %s", "WIN 🟢" if won else "LOSE 🔴", stats_line())
 
-        # ── Jeda setiap 1.000 spin ───────────────────────────────────────
+        # ── Jeda setiap N spin ────────────────────────────────────────────
         if total_rounds % PAUSE_SPIN_EVERY == 0:
-            log.info("🔁 %d spin tercapai!", total_rounds)
-            log.info("   %s", stats_line())
+            log.info("🔁 %d spin tercapai! | %s", total_rounds, stats_line())
             pause_countdown(PAUSE_SPIN_SECS, f"{total_rounds} Spin")
-            current_bet = reset_session(current_bet)
-            ses_profit  = 0.0
-            ses_wins    = 0
-            ses_losses  = 0
+            current_bet = reset_session()
+            ses_profit = 0.0; ses_wins = 0; ses_losses = 0
             continue
 
-        # ── Jeda profit sesi ─────────────────────────────────────────────
-        if ses_profit >= PAUSE_PROFIT_USD:
-            log.info("🎯 Profit sesi Rp%.0f tercapai!", ses_profit * IDR_PER_USD)
-            log.info("   %s", stats_line())
-            pause_countdown(PAUSE_PROFIT_SECS, "Profit Rp{:,.0f}".format(ses_profit * IDR_PER_USD))
-            current_bet = reset_session(current_bet)
-            ses_profit  = 0.0
-            ses_wins    = 0
-            ses_losses  = 0
+        # ── Jeda profit sesi ──────────────────────────────────────────────
+        if ses_profit >= PAUSE_PROFIT:
+            log.info("🎯 Profit sesi Rp%s tercapai! | %s",
+                     f"{ses_profit:,.0f}", stats_line())
+            pause_countdown(PAUSE_PROFIT_SECS,
+                            f"Profit Rp{ses_profit:,.0f}")
+            current_bet = reset_session()
+            ses_profit = 0.0; ses_wins = 0; ses_losses = 0
             continue
 
-        # ── Jeda stop loss sesi ──────────────────────────────────────────
-        if ses_profit <= -PAUSE_LOSS_USD:
-            log.info("🛑 Stop loss sesi Rp%.0f tercapai!", abs(ses_profit) * IDR_PER_USD)
-            log.info("   %s", stats_line())
-            pause_countdown(PAUSE_LOSS_SECS, "Stop Loss Rp{:,.0f}".format(abs(ses_profit) * IDR_PER_USD))
-            current_bet = reset_session(current_bet)
-            ses_profit  = 0.0
-            ses_wins    = 0
-            ses_losses  = 0
+        # ── Jeda stop loss sesi ───────────────────────────────────────────
+        if ses_profit <= -PAUSE_LOSS:
+            log.info("🛑 Stop loss sesi Rp%s! | %s",
+                     f"{abs(ses_profit):,.0f}", stats_line())
+            pause_countdown(PAUSE_LOSS_SECS,
+                            f"Stop Loss Rp{abs(ses_profit):,.0f}")
+            current_bet = reset_session()
+            ses_profit = 0.0; ses_wins = 0; ses_losses = 0
             continue
 
         time.sleep(BET_DELAY)
