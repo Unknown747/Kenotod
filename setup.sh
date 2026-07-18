@@ -37,12 +37,11 @@ if [ "${create_env:-false}" = "true" ]; then
         exit 1
     fi
 
-    cat > "$ENV_FILE" <<EOF
-# Stake Keno Bot — Environment Variables
-# Jangan di-share atau di-commit ke repository!
-
-STAKE_API_KEY=${api_key}
-EOF
+    # Tulis .env dengan printf agar karakter spesial ($, !, \) di API key
+    # tidak di-expand oleh shell — heredoc tanpa quote tidak aman untuk token
+    printf '# Stake Keno Bot — Environment Variables\n' > "$ENV_FILE"
+    printf '# Jangan di-share atau di-commit ke repository!\n\n' >> "$ENV_FILE"
+    printf 'STAKE_API_KEY=%s\n' "$api_key" >> "$ENV_FILE"
 
     echo ""
     echo "[OK] File .env berhasil dibuat."

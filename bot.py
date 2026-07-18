@@ -202,7 +202,7 @@ def place_bet(amount_idr: float) -> dict:
             break
 
     return {
-        "id":      bet["id"],
+        "id":      bet.get("id", ""),
         "amount":  amount,
         "payout":  payout,
         "profit":  profit,
@@ -218,9 +218,10 @@ def pause_countdown(seconds: int, label: str):
         time.sleep(min(10, remaining))
     log.info("▶  Jeda selesai — melanjutkan bot…")
 
-def reset_session():
+def reset_session(rotate_seed: bool = True):
     log.info("🔄 Reset sesi — bet kembali ke Rp%d", STARTING_BET)
-    reset_seed()
+    if rotate_seed:
+        reset_seed()
     return STARTING_BET
 
 # ─── Main bot loop ────────────────────────────────────────────────────────────
@@ -339,6 +340,8 @@ def run_bot():
 
         # FIX #5: Cek reset threshold SETELAH bet ditempatkan
         # → ronde berikutnya langsung dimulai dari STARTING_BET jika terlewati
+        # _seed_rotated mencegah double-rotate jika jeda sesi juga terpicu di spin sama
+        _seed_rotated = False
         if bet_amount > RESET_THRESHOLD + 1e-6:
             log.info(
                 "↩  Bet Rp%d > threshold Rp%d — ronde berikutnya reset ke Rp%d & rotasi seed",
@@ -346,15 +349,16 @@ def run_bot():
             )
             current_bet = STARTING_BET
             reset_seed()
+            _seed_rotated = True
             _too_small_fallback_used = False
 
         # ── Jeda setiap N spin ────────────────────────────────────────────
         if total_rounds % PAUSE_SPIN_EVERY == 0:
             log.info("🔁 %d spin tercapai! | %s", total_rounds, stats_line())
             pause_countdown(PAUSE_SPIN_SECS, f"{total_rounds} Spin")
-            current_bet = reset_session()
+            current_bet = reset_session(rotate_seed=not _seed_rotated)
             ses_profit = 0.0; ses_wins = 0; ses_losses = 0
-            _too_small_fallback_used = False
+            _too_small_fallback_used = False; _seed_rotated = False
             continue
 
         # ── Jeda profit sesi ──────────────────────────────────────────────
@@ -363,9 +367,9 @@ def run_bot():
                      f"{ses_profit:,.0f}", stats_line())
             pause_countdown(PAUSE_PROFIT_SECS,
                             f"Profit Rp{ses_profit:,.0f}")
-            current_bet = reset_session()
+            current_bet = reset_session(rotate_seed=not _seed_rotated)
             ses_profit = 0.0; ses_wins = 0; ses_losses = 0
-            _too_small_fallback_used = False
+            _too_small_fallback_used = False; _seed_rotated = False
             continue
 
         # ── Jeda stop loss sesi ───────────────────────────────────────────
@@ -374,13 +378,18 @@ def run_bot():
                      f"{abs(ses_profit):,.0f}", stats_line())
             pause_countdown(PAUSE_LOSS_SECS,
                             f"Stop Loss Rp{abs(ses_profit):,.0f}")
-            current_bet = reset_session()
+            current_bet = reset_session(rotate_seed=not _seed_rotated)
             ses_profit = 0.0; ses_wins = 0; ses_losses = 0
-            _too_small_fallback_used = False
+            _too_small_fallback_used = False; _seed_rotated = False
             continue
 
-        time.sleep(BET_DELAY)
+        if BET_DELAY:
+            time.sleep(BET_DELAY)
 
 
 if __name__ == "__main__":
-    run_bot()
+    try:
+        run_bot()
+    except KeyboardInterrupt:
+        log.info("\n⛔ Bot dihentikan manual (Ctrl+C).")
+        sys.exit(0)
